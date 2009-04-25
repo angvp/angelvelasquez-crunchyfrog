@@ -25,6 +25,10 @@ import sys
 import urlparse
 
 
+class CFError(Exception):
+    """Base class for all errors."""
+
+
 PREFIX = '/usr/'
 
 def _is_source_dir():

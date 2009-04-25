@@ -75,6 +75,8 @@ Ideas
 - Add an template base export plugin (Jinja?). Possible export formats: HTML,
   XML, TeX, plain text, ... The templates could be customizable.
 - Visual query builder using sqlalchemy?
+- Use PackageKit to install DB-API2 modules?
+  https://bugzilla.redhat.com/show_bug.cgi?id=484511#c5
 
 
 Software Engineering

@@ -45,6 +45,17 @@ except gobject.GError, err:
     HAVE_ICONS = False
 
 
+# GTK style from GEdit's close button (gedit-notebook.c)
+gtk.rc_parse_string('''style "cf-tab-button-style"
+{
+  GtkWidget::focus-padding = 0
+  GtkWidget::focus-line-width = 0
+  xthickness = 0
+  ythickness = 0
+}
+widget "*.cf-tab-button" style "cf-tab-button-style"''')
+
+
 class PaneItem(object):
     name = None
     icon = None
@@ -387,6 +398,10 @@ class TabLabel(gtk.HBox):
 
     def __init__(self, editor):
         gtk.HBox.__init__(self)
+        self.set_spacing(4)
+        self.datasource_color_eb = gtk.EventBox()
+        self.datasource_color_eb.set_size_request(5, -1)
+        self.pack_start(self.datasource_color_eb, False, False)
         self.label = gtk.Label(_(u"Query"))
         self.label.set_ellipsize(pango.ELLIPSIZE_END)
         self.label.set_width_chars(15)
@@ -406,24 +421,17 @@ class TabLabel(gtk.HBox):
             self.update_label(buffer)
         self.pack_start(self.label, True, True)
         btn_close = gtk.Button()
-        btn_close.connect("clicked", self.on_button_close_clicked)
-        self.add_icon_to_button(btn_close)
+        btn_close.set_focus_on_click(False)
         btn_close.set_relief(gtk.RELIEF_NONE)
+        btn_close.set_name('cf-tab-button')
+        image = gtk.image_new_from_stock(gtk.STOCK_CLOSE,
+                                         gtk.ICON_SIZE_MENU)
+        btn_close.add(image)
+        btn_close.set_tooltip_text(_(u'Close'))
+        btn_close.connect("clicked", self.on_button_close_clicked)
         self.pack_start(btn_close, False, False)
         self.update_tooltip()
         self.show_all()
-
-    def add_icon_to_button(self,button):
-        image = gtk.Image()
-        image.set_from_stock(gtk.STOCK_CLOSE,gtk.ICON_SIZE_MENU)
-        button.set_relief(gtk.RELIEF_NONE)
-        button.set_image(image)
-        settings = gtk.Widget.get_settings(image)
-        (w,h) = gtk.icon_size_lookup_for_settings(settings,gtk.ICON_SIZE_MENU)
-        button.set_size_request(w+12, h+6)
-        button.set_border_width(0)
-        image.show()
-        return
 
     def on_button_close_clicked(self, button):
         self.editor.close()
@@ -468,4 +476,13 @@ class TabLabel(gtk.HBox):
             if self.editor.get_filename():
                 markup += "\n<b>File:</b> "+self.editor.get_filename()
             self.label.set_tooltip_markup(markup)
+            self.datasource_color_eb.set_tooltip_markup(markup)
+            conn = self.editor.connection
+            if conn and conn.datasource.color:
+                color = gtk.gdk.color_parse(conn.datasource.color)
+                self.datasource_color_eb.modify_bg(gtk.STATE_NORMAL, color)
+                self.datasource_color_eb.modify_bg(gtk.STATE_ACTIVE, color)
+            else:
+                self.datasource_color_eb.modify_bg(gtk.STATE_NORMAL, None)
+                self.datasource_color_eb.modify_bg(gtk.STATE_ACTIVE, None)
 

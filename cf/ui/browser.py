@@ -27,7 +27,7 @@ try:
 except ImportError:
     HAVE_SEXY = False
 
-from cf.datasources import DatasourceInfo
+from cf.db import Datasource
 from cf.backends import DBConnectError, schema
 from cf.ui.editor import SQLView
 from cf.ui import pane, dialogs
@@ -75,12 +75,17 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
             gobject.TYPE_PYOBJECT, # 3 double-click callback
             gobject.TYPE_PYOBJECT, # 4 popup menu callback
             str,                   # 5 tooltip
+            gtk.gdk.Color,         # 6 color
+            bool,                  # 7 color cell visible
             )
         self.model.set_sort_column_id(1, gtk.SORT_ASCENDING)
         # TreeView
         self.object_tree = gtk.TreeView(self.model)
         self.add(self.object_tree)
         self.object_tree.set_tooltip_column(5)
+        col = gtk.TreeViewColumn('', gtk.CellRendererText(),
+                                 background_gdk=6, visible=7)
+        self.object_tree.append_column(col)
         col = gtk.TreeViewColumn()
         renderer = gtk.CellRendererPixbuf()
         col.pack_start(renderer, expand=False)
@@ -89,6 +94,7 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
         col.pack_start(renderer, expand=True)
         col.add_attribute(renderer, 'text', 1)
         self.object_tree.append_column(col)
+        self.object_tree.set_expander_column(col)
         self.object_tree.set_headers_visible(False)
         self.object_tree.enable_model_drag_source(
             gtk.gdk.BUTTON1_MASK,
@@ -134,7 +140,7 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
                                      self.on_datasource_added)
         self.app.datasources.connect('datasource-deleted',
                                      self.on_datasource_deleted)
-        self.app.datasources.connect('datasource-modified',
+        self.app.datasources.connect('datasource-changed',
                                      self.on_datasource_modified)
         self.object_tree.connect('button-press-event',
                                  self.on_button_press_event)
@@ -186,7 +192,18 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
         y = int(event.y)
         time = event.time
         pthinfo = treeview.get_path_at_pos(x, y)
-        popup = gtk.Menu()
+        popup = self.instance.ui.get_widget('/NavigatorPopup')
+        obj = None
+        if pthinfo is not None:
+            path, col, cellx, celly = pthinfo
+            treeview.grab_focus()
+            treeview.set_cursor( path, col, 0)
+            model = treeview.get_model()
+            iter_ = model.get_iter(path)
+            obj = model.get_value(iter_, 0)
+        self.emit('object-menu-popup', popup, obj)
+        popup.popup(None, None, None, event.button, time)
+        return
         if pthinfo is None:
             item = gtk.MenuItem(_(u"Add data source"))
             item.connect("activate", self.instance.on_datasource_manager)
@@ -234,19 +251,18 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
             model = treeview.get_model()
             iter_ = model.get_iter(path)
             obj = model.get_value(iter_, 0)
-            if isinstance(obj, DatasourceInfo) \
+            if isinstance(obj, Datasource) \
             and not obj.internal_connection:
                 self.instance.statusbar.push(0, _(u"Connecting..."))
-                try:
-                    conn = obj.dbconnect()
-                    editor = self.instance.editor_create()
-                    editor.set_connection(conn)
-                    self.on_object_tree_selection_changed(
-                        self.object_tree.get_selection())
-                except DBConnectError, err:
-                    dialogs.error(_(u"Connection failed"), str(err))
+                conn = obj.dbconnect()
+                if conn is None:
                     self.instance.statusbar.pop(0)
-            elif isinstance(obj, DatasourceInfo):
+                    return
+                editor = self.instance.editor_create()
+                editor.set_connection(conn)
+                self.on_object_tree_selection_changed(
+                    self.object_tree.get_selection())
+            elif isinstance(obj, Datasource):
                 editor = self.instance.editor_create()
                 editor.set_connection(obj.internal_connection)
 
@@ -281,9 +297,9 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
         if iter_ is None:
             return
         obj = model.get_value(iter_, 0)
-        if isinstance(obj, DatasourceInfo):
+        if isinstance(obj, Datasource):
             if obj.internal_connection:
-                server_info = obj.internal_connection.get_server_info()
+                server_info = obj.meta.get_server_info()
                 if server_info:
                     self.instance.statusbar.push(0, server_info)
                 else:
@@ -312,26 +328,46 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
             if isinstance(cobj, DummyNode):
                 datasource_info = self.find_datasource_info(model, citer)
                 model.remove(citer)
-                if datasource_info.backend.schema and datasource_info.internal_connection:
-                    for child in datasource_info.backend.schema.fetch_children(datasource_info.internal_connection, obj) or []:
-                        citer = model.append(iter)
-                        if child.icon:
-                            icon = self.app.load_icon(child.icon,
-                                                      gtk.ICON_SIZE_MENU,
-                                                      gtk.ICON_LOOKUP_FORCE_SVG)
-                        else:
-                            icon = None
-                        model.set(citer,
-                                  0, child,
-                                  1, child.name,
-                                  2, icon,
-                                  5, child.description)
-                        if child.has_children:
-                            cciter = model.append(citer)
-                            model.set(cciter, 0, DummyNode())
-                    citer = model.iter_children(iter)
-                    if citer:
-                        treeview.expand_row(model.get_path(iter), False)
+                if datasource_info.meta is None:
+                    return
+                if isinstance(obj, Datasource):
+                    obj = None
+                icon = self.app.load_icon(gtk.STOCK_OPEN,
+                                          gtk.ICON_SIZE_MENU,
+                                          gtk.ICON_LOOKUP_FORCE_SVG)
+                for child in datasource_info.meta.get_children(obj):
+                    citer = model.append(iter)
+                    model.set(citer,
+                              0, child,
+                              1, child.get_display_name(),
+                              2, child.get_icon_pixbuf(),
+                              5, child.comment,
+                              7, False)
+                    cciter = model.append(citer)
+                    model.set(cciter, 0, DummyNode(), 7, False)
+                treeview.expand_row(model.get_path(iter), False)
+                return
+
+                ## if datasource_info.backend.schema and datasource_info.internal_connection:
+                ##     for child in datasource_info.backend.schema.fetch_children(datasource_info.internal_connection, obj) or []:
+                ##         citer = model.append(iter)
+                ##         if child.icon:
+                ##             icon = self.app.load_icon(child.icon,
+                ##                                       gtk.ICON_SIZE_MENU,
+                ##                                       gtk.ICON_LOOKUP_FORCE_SVG)
+                ##         else:
+                ##             icon = None
+                ##         model.set(citer,
+                ##                   0, child,
+                ##                   1, child.name,
+                ##                   2, icon,
+                ##                   5, child.description)
+                ##         if child.has_children:
+                ##             cciter = model.append(citer)
+                ##             model.set(cciter, 0, DummyNode())
+                ##     citer = model.iter_children(iter)
+                ##     if citer:
+                ##         treeview.expand_row(model.get_path(iter), False)
 
     def on_show_details(self, menuitem, object, model, iter):
         # FIXME(andi): Rewrite this part when main notebook allows different
@@ -352,7 +388,7 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
     def find_datasource_info(self, model, iter):
         while iter:
             obj = model.get_value(iter, 0)
-            if isinstance(obj, DatasourceInfo):
+            if isinstance(obj, Datasource):
                 return obj
             iter = model.iter_parent(iter)
 
@@ -375,13 +411,19 @@ class Browser(gtk.ScrolledWindow, pane.PaneItem):
             ico = self.app.load_icon('stock_connect')
         else:
             ico = self.app.load_icon('stock_disconnect')
+        if datasource_info.color is not None:
+            color = gtk.gdk.color_parse(datasource_info.color)
+        else:
+            color = None
         self.model.set(iter,
                   0, datasource_info,
                   1, datasource_info.get_label(),
                   2, ico,
                   3, None,
                   4, self._create_dsinfo_menu,
-                  5, datasource_info.description)
+                  5, datasource_info.description,
+                  6, color,
+                  7, True)
         citer = self.model.iter_children(iter)
         if datasource_info.get_connections() \
         and not citer:

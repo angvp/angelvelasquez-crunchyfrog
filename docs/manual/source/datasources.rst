@@ -103,6 +103,10 @@ Toolbar
    select a connection. The connection chooser is bound
    to the currently active SQL editor.
 
+.. note::
+   If you encounter troubles when connecting to Firebird, please
+   refer to http://www.firebirdfaq.org/faq121/ for a possible solution.
+
 
 .. index::
    pair: Editor; Connections

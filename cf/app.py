@@ -28,10 +28,11 @@ import webbrowser
 import gobject
 import gtk
 
-from cf import release, USER_DIR, MANUAL_URL
+from cf import release, USER_DIR, MANUAL_URL, DATA_DIR
 from config import Config
-from datasources import DatasourceManager
 from plugins.core import PluginManager
+from cf.db import DatasourceManager
+from cf.ui.datasources import DatasourcesDialog
 from cf.ui.widgets import ConnectionsDialog
 from ui.mainwindow import MainWindow
 from ui.prefs import PreferencesDialog
@@ -70,9 +71,9 @@ class CFApplication(gobject.GObject):
         """Initializes the application"""
         self.cb = CFAppCallbacks()
         self.__shutdown_tasks = []
-        self._check_version()
         self.config = Config(self, self.options.config)
         self.userdb = UserDB(self)
+        self._check_version()
         self.run_listener()
         self.plugins = PluginManager(self)
         self.datasources = DatasourceManager(self)
@@ -86,10 +87,61 @@ class CFApplication(gobject.GObject):
         else:
             dir_version = None
         if dir_version != release.version:
+            self._datasources_db2url(dir_version, release.version)
             # Do upgrades here
             f = open(version_file, "w")
             f.write(release.version)
             f.close()
+
+    def _datasources_db2url(self, dir_version, release):
+        """Move data source config from userdb to datasources.cfg."""
+        # Upgrade to 0.4.0: Data source are no longer stored in userdb.
+        # TODO: Remove this hook in some upcoming major version.
+        import cPickle
+        from cf.db import Datasource
+        from cf.db.url import URL
+        from cf.ui import dialogs
+        manager = DatasourceManager(self)
+        x = self.userdb.get_table_version('datasource')
+        if x is None:  # already dropped
+            return
+        sql = ('select name, description, backend, options, password '
+               'from datasource')
+        self.userdb.cursor.execute(sql)
+        ldap_found = False
+        for item in self.userdb.cursor.fetchall():
+            old_backend = item[2].split('.')[-1]
+            print old_backend
+            opts = cPickle.loads(str(item[3]))
+            if old_backend in ('mssql', 'oracle', 'mysql', 'postgres'):
+                url = URL(old_backend)
+                for name in ['database', 'host', 'port',
+                             'user', 'password']:
+                    if name in opts:
+                        setattr(url, name, opts[name])
+                if item[4]:
+                    url.password = item[4]
+                ds = Datasource(manager)
+                ds.url = url
+                ds.name = item[0]
+                ds.decription = item[1]
+                ds.ask_for_password = opts.get('ask_for_password', False)
+                manager.save(ds)
+            elif old_backend == 'sqlite':
+                url = URL(old_backend)
+                url.database = opts.get('filename', None)
+                ds = Datasource(manager)
+                ds.url = url
+                ds.name = item[0]
+                ds.description = item[1]
+                ds.ask_for_password = opts.get('ask_for_password', False)
+                manager.save(ds)
+            elif old_backed == 'ldap':
+                ldap_found = True
+        if ldap_found:
+            dialogs.warning('Warning',
+                            'Sorry, LDAP server are no longer supported.')
+        self.userdb.drop_table('datasource')
 
     # ---
     # Instance handling
@@ -174,14 +226,13 @@ class CFApplication(gobject.GObject):
         t.setDaemon(True)
         gobject.idle_add(t.start)
 
-    def show_help(self, topic=None):
+    def show_help(self, topic='index'):
         """Opens a webbrowser with a help page.
 
         Arguments:
           topic: If given, the URL points to the selected topic.
         """
-        if topic is None:
-            url = os.path.join(MANUAL_URL, 'index.html')
+        url = os.path.join(MANUAL_URL, '%s.html' % topic)
         webbrowser.open(url)
 
     def shutdown(self):
@@ -202,6 +253,14 @@ class CFApplication(gobject.GObject):
             self.ipc_listener.shutdown()
         gtk.main_quit()
 
+    # ------------------
+    # Resources helpers
+    # ------------------
+
+    def get_glade_file(self, filename):
+        """Expands filename to full path pointing to Glade file."""
+        return os.path.join(DATA_DIR, 'glade', filename)
+
     def load_icon(self, icon_name, size=None, lookup_method=None):
         """Wrapper for gtk.IconTheme.load_icon that catches GError."""
         if size is None:
@@ -220,6 +279,14 @@ class CFApplication(gobject.GObject):
             logging.warning(err)
             return self.icon_theme.load_icon('gtk-missing-image',
                                              size, lookup_method)
+
+    def set_status_message(self, msg, context=1):
+        for window in self.get_instances():
+            window.statusbar.set_message(msg, context)
+
+    def pop_status_message(self, context=1):
+        for window in self.get_instances():
+            window.statusbar.pop(context)
 
 
 class CFAppCallbacks(gobject.GObject):

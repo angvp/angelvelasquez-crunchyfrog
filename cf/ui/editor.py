@@ -240,30 +240,23 @@ class Editor(GladeWidget, PaneItem):
     def commit(self):
         """Commit current transaction, if any."""
         if not self.connection: return
-        cur = self.connection.cursor()
-        cur.execute("commit")
-        cur.close()
+        self.connection.commit()
         self.results.add_message('COMMIT', 'info')
 
     def rollback(self):
         """Commit current transaction, if any."""
         if not self.connection: return
-        cur = self.connection.cursor()
-        cur.execute("rollback")
-        cur.close()
+        self.connection.rollback()
         self.results.add_message('ROLLBACK', 'info')
 
     def begin_transaction(self):
         """Begin transaction."""
         if not self.connection: return
-        cur = self.connection.cursor()
-        cur.execute("begin")
-        cur.close()
+        self.connection.begin()
         self.results.add_message('BEGIN TRANSACTION', 'info')
 
     def execute_query(self, statement_at_cursor=False):
         def exec_threaded(statement):
-            cur = self.connection.cursor()
             if self.app.config.get("sqlparse.enabled", True):
                 stmts = sqlparse.split(statement)
             else:
@@ -271,8 +264,8 @@ class Editor(GladeWidget, PaneItem):
             for stmt in stmts:
                 if not stmt.strip():
                     continue
-                query = Query(stmt, cur)
-                query.coding_hint = self.connection.coding_hint
+                query = Query(stmt, self.connection)
+#                query.coding_hint = self.connection.coding_hint
                 gtk.gdk.threads_enter()
                 query.connect("started", self.on_query_started)
                 query.connect("finished",
@@ -329,16 +322,15 @@ class Editor(GladeWidget, PaneItem):
         if self.connection.threadsafety >= 2:
             thread.start_new_thread(exec_threaded, (statement,))
         else:
-            cur = self.connection.cursor()
             if self.app.config.get("sqlparse.enabled", True):
                 stmts = sqlparse.split(statement)
             else:
-                stms = [statement]
+                stmts = [statement]
             for stmt in stmts:
                 if not stmt.strip():
                     continue
-                query = Query(stmt, cur)
-                query.coding_hint = self.connection.coding_hint
+                query = Query(stmt, self.connection)
+#                query.coding_hint = self.connection.coding_hint
                 query.connect("started", self.on_query_started)
                 query.connect("finished", self.on_query_finished, tag_notice)
                 query.execute()

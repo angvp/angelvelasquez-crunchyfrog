@@ -37,6 +37,34 @@ from gettext import gettext as _
 import logging
 log = logging.getLogger("PG")
 
+class PostgresDriver:
+
+    def get_dbapi(self):
+        """Import and return DB API module."""
+        import psycopg2
+        return psycopg2
+
+    def get_options(self):
+        opts = (
+            DriverOption(key='database',
+                         label=_(u'_Database')),
+            DriverOption(key='host',
+                         label=_(u'_Host')),
+            DriverOption(key='port',
+                         label=_(u'P_ort'),
+                         widget='integerinput'),
+            DriverOption(key='username',
+                         label=_(u'_Username')),
+            DriverOption(key='password',
+                         label=_(u'_Password'),
+                         widget='password'),
+            DriverOption(key='sslmode',
+                         label=_(u'Use _SSL'),
+                         widget='checkbox')
+            )
+        return opts
+
+
 
 class PostgresBackend(DBBackendPlugin):
 
