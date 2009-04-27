@@ -57,6 +57,9 @@ def warning(short, long=None, parent=None, buttons=gtk.BUTTONS_OK):
 def yesno(short, long=None, parent=None, buttons=gtk.BUTTONS_YES_NO):
     return _run_dialog(short, long, parent, buttons, gtk.STOCK_DIALOG_QUESTION)
 
+def info(short, long=None, parent=None, buttons=gtk.BUTTONS_OK):
+    return _run_dialog(short, long, parent, buttons, gtk.STOCK_DIALOG_INFO)
+
 def password(title, msg=None, parent=None):
     dlg = gtk.MessageDialog(parent,
                             gtk.DIALOG_MODAL|gtk.DIALOG_DESTROY_WITH_PARENT,

@@ -162,7 +162,7 @@ class CrunchyStatusbar(gtk.Statusbar):
             return
         self._connect_editor_sigs()
 
-    def set_message(self, msg):
+    def set_message(self, msg, context=0):
         """Show an informal message in the statusbar.
 
         This method is just a wrapper for gtk.Statusbar.push(0, msg).
@@ -170,4 +170,4 @@ class CrunchyStatusbar(gtk.Statusbar):
         Args:
           msg: Informal message (str).
         """
-        self.push(0, msg)
+        self.push(context, msg)

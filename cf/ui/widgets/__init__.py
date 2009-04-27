@@ -49,7 +49,7 @@ class ConnectionButton(gtk.MenuToolButton):
         self._editor = None
         self._setup_widget()
         self.set_editor(None)
-        self.app.datasources.connect("datasource-modified",
+        self.app.datasources.connect("datasource-changed",
                                      lambda *a: self.rebuild_menu())
         self.app.datasources.connect("datasource-added",
                                      lambda *a: self.rebuild_menu())
@@ -93,8 +93,8 @@ class ConnectionButton(gtk.MenuToolButton):
         if editor and editor.connection:
             self._label.set_text(editor.connection.get_label())
             markup = ("<b>%s</b>\n%s #%s"
-                      % (editor.connection.datasource_info.get_label(),
-                         _(u"Connection"), editor.connection.conn_number))
+                      % (editor.connection.datasource.get_label(),
+                         _(u"Connection"), editor.connection.num))
             self.set_tooltip_markup(markup)
         else:
             self._label.set_text("<"+_(u"Not connected")+">")

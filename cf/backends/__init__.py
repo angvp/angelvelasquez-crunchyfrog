@@ -163,14 +163,14 @@ class Query(gobject.GObject):
                       tuple())
     }
 
-    def __init__(self, statement, cursor):
+    def __init__(self, statement, connection):
         self.__gobject_init__()
         self.statement = statement
-        self.cursor = cursor
+        self.connection = connection
         self.description = None
         self.rowcount = -1
         self.rows = None
-        self.messages = None
+        self.messages = []
         self.failed = False
         self.executed = False
         self.execution_time = None
@@ -183,20 +183,30 @@ class Query(gobject.GObject):
         else:
             self.emit("started")
         start = time.time()
-        stmt = self.cursor.prepare_statement(self.statement)
+        stmt = self.connection.prepare_statement(self.statement)
+        # Let's go down to plain DB-API stuff to speed things up a bit
+        # and to avoid statement modifications done by sqlalchemy.
+        # We're not afraid of SQL injections here and don't need to
+        # replace parameters... ;-)
+        dbapi_conn = self.connection.get_dbapi_connection()
+        dbapi_cur = dbapi_conn.cursor()
         try:
-            self.cursor.execute(stmt)
+            dbapi_cur.execute(stmt)
         except:
             self.failed = True
             self.errors.append(str(sys.exc_info()[1]))
         self.executed = True
         self.execution_time = time.time() - start
-        self.messages = self.cursor.get_messages()
         if not self.failed:
-            self.description = self.cursor.description
-            self.rowcount = self.cursor.rowcount
+            if hasattr(dbapi_cur, 'statusmessage'):
+                self.messages = [dbapi_cur.statusmessage]
+            else:
+                self.messages = []
+            self.description = dbapi_cur.description
+            self.rowcount = dbapi_cur.rowcount
             if self.description:
-                self.rows = self.cursor.fetchall()
+                self.rows = dbapi_cur.fetchall()
+        self.connection.update_transaction_state()
         if threaded:
             Emit(self, "finished")
         else:

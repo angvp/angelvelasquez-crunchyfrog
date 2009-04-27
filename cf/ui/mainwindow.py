@@ -40,7 +40,7 @@ from cf.ui import utils
 from cf.ui import widgets
 from cf.ui.browser import Browser
 from cf.ui.confirmsave import ConfirmSaveDialog
-from cf.ui.datasources import DatasourceManager
+from cf.ui.datasources import DatasourcesDialog
 from cf.ui.editor import Editor
 from cf.ui.statusbar import CrunchyStatusbar
 
@@ -431,7 +431,7 @@ class MainWindow(gtk.Window):
             gobject.idle_add(self.set_transaction_state, value, connection)
 
     def on_datasource_manager(self, *args):
-        dlg = DatasourceManager(self)
+        dlg = DatasourcesDialog(self.app, self)
         dlg.run()
         dlg.destroy()
 
@@ -802,14 +802,9 @@ class MainWindow(gtk.Window):
         commit = self._get_action('query-commit')
         rollback = self._get_action('query-rollback')
         begin = self._get_action('query-begin')
-        if connection.provider.features.transactions:
-            commit.set_sensitive((value & TRANSACTION_COMMIT_ENABLED) != 0)
-            rollback.set_sensitive((value & TRANSACTION_ROLLBACK_ENABLED) != 0)
-            begin.set_sensitive((value & TRANSACTION_IDLE) != 0)
-        else:
-            commit.set_sensitive(False)
-            rollback.set_sensitive(False)
-            begin.set_sensitive(False)
+        commit.set_sensitive((value & TRANSACTION_COMMIT_ENABLED) != 0)
+        rollback.set_sensitive((value & TRANSACTION_ROLLBACK_ENABLED) != 0)
+        begin.set_sensitive((value & TRANSACTION_IDLE) != 0)
 
     def state_restore(self):
         """Restore window state."""
@@ -937,4 +932,7 @@ UI = '''
     <toolitem name="QueryCommit" action="query-commit" />
     <toolitem name="QueryRollback" action="query-rollback" />
   </toolbar>
+  <popup name="NavigatorPopup">
+    <menuitem name="DatasourceAdd" action="instance-datasourcemanager" />
+  </popup>
 '''

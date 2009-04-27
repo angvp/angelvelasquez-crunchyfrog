@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # crunchyfrog - a database schema browser and query tool
-# Copyright (C) 2008 Andi Albrecht <albrecht.andi@gmail.com>
+# Copyright (C) 2009 Andi Albrecht <albrecht.andi@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,344 +16,483 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Datasources"""
+"""Dialog to manage data sources and connections."""
 
-import gtk
+import sys
+
 import gobject
+import gtk
 
-from gettext import gettext as _
+import cf.db
+from cf.db.backends import GUIOption
+from cf.ui import dialogs
+from cf.ui.widgets.sqlview import SQLView
 
-from cf.ui import GladeWidget, dialogs
-from cf.ui.widgets import ConnectionsWidget
-from cf.datasources import DatasourceInfo
 
-COMMON_OPTIONS = ["dsn", "host", "port", "database", "user", "password"]
+class DatasourcesDialog(object):
 
-class DatasourceManager(GladeWidget):
 
-    def __init__(self, win):
-        self.instance = win
-        GladeWidget.__init__(self, win, "datasourcemanager",
-                             "datasourcemanager")
-        from cf.plugins.core import PLUGIN_TYPE_BACKEND
-        if not self.app.plugins.get_plugins(PLUGIN_TYPE_BACKEND, True):
-            self.run = self.run_warning
-        self.set_data("be_widgets", dict())
+    def __init__(self, app, parent=None):
+        self.app = app
+        self.builder = gtk.Builder()
+        self.builder.add_from_file(app.get_glade_file('datasources.glade'))
+        self.builder.connect_signals(self)
+        self.dlg = self.builder.get_object('datasources_dialog')
+        self.dlg.set_transient_for(parent)
+        self.init_datasources()
+        self.refresh_datasources()
+        self.init_providers()
+        self.refresh_providers()
+        self.app.datasources.connect('datasource-changed',
+                                     lambda *a: self.refresh_datasources())
+        self.app.datasources.connect('datasource-added',
+                                     lambda *a: self.refresh_datasources())
+        self.app.datasources.connect('datasource-deleted',
+                                     lambda *a: self.refresh_datasources())
 
-    def _setup_widget(self):
-        # Fix help button
-        btn = self.xml.get_widget("btn_help_ds")
-        box = self.xml.get_widget("dialog-action_area8")
-        box.set_child_secondary(btn, True)
-        # Backends
-        cmb = self.xml.get_widget("cmb_backends")
-        model = gtk.ListStore(gobject.TYPE_PYOBJECT,
-                              str, str)
-        model.set_sort_column_id(2, gtk.SORT_ASCENDING)
-        cmb.set_model(model)
-        cell = gtk.CellRendererText()
-        cmb.pack_start(cell, True)
-        cmb.add_attribute(cell, "markup", 1)
-        self._init_backends(model)
-        # Saved connections
-        tv = self.xml.get_widget("tv_stored_connections")
-        model = gtk.ListStore(gobject.TYPE_PYOBJECT,
-                              str)
-        model.set_sort_column_id(1, gtk.SORT_ASCENDING)
-        tv.set_model(model)
-        col = gtk.TreeViewColumn("", gtk.CellRendererText(), markup=1)
-        tv.append_column(col)
-        sel = tv.get_selection()
-        sel.connect("changed", self.on_selected_datasource_changed)
-        self.refresh_saved_connections()
-        # Connections
-        notebook = self.xml.get_widget("dsmanager_notebook")
-        self.connections = ConnectionsWidget(self.win)
-        lbl = gtk.Label(_(u"_Connections"))
-        lbl.set_use_underline(True)
-        self.connections.widget.set_border_width(5)
-        notebook.append_page(self.connections.widget, lbl)
+    # -----------------
+    # Dialog callbacks
+    # -----------------
 
-    def run_warning(self):
-        dialogs.warning(_(u"No active database backends."),
-                        _(u"Open preferences and activate at least one database backend plugin."))
-
-    def _init_backends(self, model):
-        model.clear()
-        nb = self.xml.get_widget("nb_options")
-        from cf.plugins.core import PLUGIN_TYPE_BACKEND
-        for be in self.app.plugins.get_plugins(PLUGIN_TYPE_BACKEND, True):
-            iter = model.append(None)
-            model.set(iter, 0, be, 1, be.name, 2, be.name)
-        iter = model.append(None)
-        model.set(iter, 0, -1, 1, "<i>%s</i>" % _(u"Other..."), 2, "Z"*10)
-
-    def _on_ask_for_password(self, check):
-        return check.get_active()
-
-    def _on_get_data_from_entry(self, entry):
-        return entry.get_text().strip() or None
-
-    def _on_get_port(self, spin):
-        return spin.get_value_as_int() or None
-
-    def _create_widget_database(self, data_widgets, conn=None):
-        e = gtk.Entry()
-        if conn and conn.options.get("database", None):
-            e.set_text(conn.options.get("database"))
-        data_widgets["database"] = (self._on_get_data_from_entry, e)
-        return data_widgets, gtk.Label(_(u"Database:")), e
-
-    def _create_widget_dsn(self, data_widgets, conn=None):
-        e = gtk.Entry()
-        if conn and conn.options.get("dsn", None):
-            e.set_text(conn.options.get("dsn"))
-        data_widgets["dsn"] = (self._on_get_data_from_entry, e)
-        return data_widgets, gtk.Label(_(u"DSN:")), e
-
-    def _create_widget_host(self, data_widgets, conn=None):
-        e = gtk.Entry()
-        if conn and conn.options.get("host", None):
-            e.set_text(conn.options.get("host"))
-        data_widgets["host"] = (self._on_get_data_from_entry, e)
-        return data_widgets, gtk.Label(_(u"Host:")), e
-
-    def _create_widget_port(self, data_widgets, conn=None):
-        s = gtk.SpinButton(climb_rate=1, digits=0)
-        s.set_range(0, 999999)
-        s.set_increments(1, 10)
-        if conn and conn.options.get("port", None):
-            s.set_value(conn.options.get("port"))
-        #self.app.ui.tt.set_tip(s, _(u"Setting port number to 0 means no port."))
-        data_widgets["port"] = (self._on_get_port, s)
-        return data_widgets, gtk.Label(_(u"Port:")), s
-
-    def _create_widget_user(self, data_widgets, conn=None):
-        e = gtk.Entry()
-        if conn and conn.options.get("user", None):
-            e.set_text(conn.options.get("user"))
-        data_widgets["user"] = (self._on_get_data_from_entry, e)
-        return data_widgets, gtk.Label(_(u"User:")), e
-
-    def _create_widget_password(self, data_widgets, conn=None):
-        def check_toggled(check, entry):
-            entry.set_sensitive(not check.get_active())
-        e = gtk.Entry()
-        e.set_visibility(False)
-        if conn and conn.options.get("password", None):
-            e.set_text(conn.options.get("password"))
-        data_widgets["password"] = (self._on_get_data_from_entry, e)
-        check = gtk.CheckButton(_(u"_Ask for password"))
-        check.connect("toggled", check_toggled, e)
-        if conn:
-            check.set_active(conn.options.get("ask_for_password", False))
-        data_widgets["ask_for_password"] = (self._on_ask_for_password, check)
-        box = gtk.VBox()
-        box.pack_start(e, False)
-        box.pack_start(check, False)
-        return data_widgets, gtk.Label(_(u"Password:")), box
-
-    def on_be_test_connection(self, btn):
-        data = self.get_backend_options()
-        lbl = self.xml.get_widget("lbl_testconnection")
-        lbl.set_text("")
-        combo = self.xml.get_widget("cmb_backends")
-        iter = combo.get_active_iter()
-        model = combo.get_model()
-        be = model.get_value(iter, 0)
-        err = be.test_connection(data)
-        if err:
-            dialogs.error(_(u"Connection failed"), err)
-        else:
-            lbl.set_text(_(u"Successful."))
-
-    def on_cmb_backends_changed(self, combo):
-        self.set_backend_option_widgets()
-
-    def on_delete_datasource(self, *args):
-        conn = self.get_selected_saved_connection()
-        if not conn: return
-        conn.delete()
-        self.refresh_saved_connections()
-
-    def on_new_datasource(self, *args):
-        sel = self.xml.get_widget("tv_stored_connections").get_selection()
-        sel.unselect_all()
-        self.clear_fields()
+    def on_close(self, *args):
+        self.app.set_data('dialog_datasources', None)
+        self.destroy()
 
     def on_response(self, dialog, response_id):
-        if response_id == 0:
-            dialog.stop_emission("response")
-            self.instance.show_help("crunchyfrog-datasources")
+        if response_id == -1:  # help button
+            dialog.stop_emission('response')
+            self.app.show_help('datasources')
             return True
 
-    def on_save_datasource(self, *args):
-        conn = self.get_connection()
-        conn.save()
-        self.refresh_saved_connections(conn.db_id)
+    def on_show_help(self, *args):
+        self.app.show_help('datasources')
+        dlg.stop_emission('clicked')
+        return True
 
-    def on_selected_datasource_changed(self, *args):
-        conn = self.get_selected_saved_connection()
-        if conn and not self.app.plugins.is_active(conn.backend):
-            dialogs.error(_(u'Plugin not active'),
-                          _(u'Please activate the following plugin '
-                            'to use this data source: ')+conn.backend.name+'.')
-            return
-        self.xml.get_widget("btn_delete").set_sensitive(bool(conn))
-        self.clear_fields()
-        if not conn:
-            return
-        self.xml.get_widget("entry_name").set_text(conn.name or "")
-        self.xml.get_widget("entry_description").set_text(conn.description or "")
-        self.select_backend_by_id(conn.backend.id)
-        self.set_backend_option_widgets(conn)
+    # -----------
+    # Datsources
+    # -----------
 
-    def on_toggle_save_button(self, *args):
-        btn = self.xml.get_widget("btn_save")
-        cmb = self.xml.get_widget("cmb_backends")
-        if self.xml.get_widget("entry_name").get_text().strip() \
-        and self.xml.get_widget("cmb_backends").get_active_iter():
-            btn.set_sensitive(True)
-        else:
-            btn.set_sensitive(False)
+    def init_datasources(self):
+        treeview = self.builder.get_object('list_datasources')
+        model = gtk.ListStore(gobject.TYPE_PYOBJECT,  # 0 datasource
+                              str,                    # 1 label
+                              str,                    # 2 color
+                              )
+        model.set_sort_column_id(1, gtk.SORT_ASCENDING)
+        treeview.set_model(model)
+        col = gtk.TreeViewColumn()
+        renderer = gtk.CellRendererText()
+        col.pack_start(renderer, expand=False)
+        col.add_attribute(renderer, 'background', 2)
+        renderer = gtk.CellRendererText()
+        col.pack_start(renderer, expand=True)
+        col.add_attribute(renderer, 'markup', 1)
+        treeview.append_column(col)
+        selection = treeview.get_selection()
+        selection.connect('changed', self.on_selected_datasource_changed)
 
-    def clear_fields(self):
-        self.xml.get_widget("entry_name").set_text("")
-        self.xml.get_widget("entry_description").set_text("")
-        cmb = self.xml.get_widget("cmb_backends")
-        cmb.set_active(-1)
-        self.xml.get_widget("lbl_testconnection").set_text("")
-
-    def get_backend_options(self):
-        data_widgets = self.get_data("be_widgets")
-        data = dict()
-        for key, value in data_widgets.items():
-            data[key] = value[0](value[1])
-        return data
-
-    def get_connection(self):
-        db_id = None
-        conn_info = self.get_selected_saved_connection()
-        if conn_info:
-            db_id = conn_info.db_id
-        conn = DatasourceInfo(self.app, self.get_selected_backend(),
-                          self.xml.get_widget("entry_name").get_text().strip() or None,
-                          self.xml.get_widget("entry_description").get_text().strip() or None,
-                          self.get_backend_options(),
-                              db_id)
-        return conn
-
-    def get_selected_backend(self):
-        combo = self.xml.get_widget("cmb_backends")
-        iter = combo.get_active_iter()
-        if iter:
-            model = combo.get_model()
-            return model.get_value(iter, 0)
-        else:
-            return None
-
-    def get_selected_saved_connection(self):
-        sel = self.xml.get_widget("tv_stored_connections").get_selection()
-        model, iter = sel.get_selected()
-        if iter:
-            return model.get_value(iter, 0)
-        else:
-            return None
-
-    def refresh_saved_connections(self, active=None):
-        model = self.xml.get_widget("tv_stored_connections").get_model()
+    def refresh_datasources(self):
+        treeview = self.builder.get_object('list_datasources')
+        model = treeview.get_model()
         model.clear()
-        for item in DatasourceInfo.load_all(self.app):
-            iter = model.append(None)
-            lbl = item.get_label()
-            if item.description and item.description.strip():
-                lbl += '\n<span size="small">'+item.description+'</span>'
-            if not self.app.plugins.is_active(item.backend):
-                lbl += '\n<span foreground="red">'+_(u'Plugin not active.')+'</span>'
-            model.set(iter,
-                      0, item,
-                      1, lbl)
-            if active and item.db_id == active:
-                sel = self.xml.get_widget("tv_stored_connections").get_selection()
-                sel.select_iter(iter)
+        for datasource in self.app.datasources.get_all():
+            if datasource.name:
+                label = ('<b>%s (%s)</b>'
+                         % (gobject.markup_escape_text(datasource.name),
+                            gobject.markup_escape_text(datasource.public_url)))
+            else:
+                label = ('<b>%s</b>'
+                         % gobject.markup_escape_text(datasource.public_url))
+            if datasource.description:
+                label += ('\n<span size="small">%s</span>'
+                          % gobject.markup_escape_text(datasource.description))
+            else:
+                label += ('\n<span size="small"><i>%s</i></span>'
+                          % _(u'No description available.'))
+            model.append([datasource, label, datasource.color])
 
-    def run_be_info_dialog(self):
-        dlg = BackendInfoDialog(self.instance)
+    def get_selected_datasource(self):
+        treeview = self.builder.get_object('list_datasources')
+        selection = treeview.get_selection()
+        model, iter_ = selection.get_selected()
+        if iter_ is None:
+            return None
+        return model.get_value(iter_, 0)
+
+    def on_datasource_new(self, *args):
+        dlg = DatasourceEditDialog(self.app, self.dlg)
         dlg.run()
         dlg.destroy()
 
-    def select_backend_by_id(self, be_id):
-        combo = self.xml.get_widget("cmb_backends")
-        model = combo.get_model()
-        iter = model.get_iter_first()
-        while iter:
-            be = model.get_value(iter, 0)
-            if be.id == be_id:
-                combo.set_active_iter(iter)
-                return True
-            iter = model.iter_next(iter)
-        return False
+    def on_selected_datasource_changed(self, selection):
+        model, iter_ = selection.get_selected()
+        for name in ('btn_datasource_edit', 'btn_datasource_delete'):
+            widget = self.builder.get_object(name)
+            widget.set_sensitive(iter_ is not None)
 
-    def set_backend_option_widgets(self, initial_data=None):
-        be = self.get_selected_backend()
-        if be == -1:
-            self.run_be_info_dialog()
-            combo = self.xml.get_widget("cmb_backends")
-            combo.set_active(-1)
+    def on_edit_datasource(self, *args):
+        datasource = self.get_selected_datasource()
+        if datasource is None:
             return
-        data_widgets = dict()
-        if be:
-            data_widgets, widgets = be.get_datasource_options_widgets(data_widgets, initial_data)
-        else:
-            widgets = []
-        vbox = self.xml.get_widget("vbox_be_options")
-        while vbox.get_children():
-            vbox.remove(vbox.get_children()[0])
-        if not widgets:
-            vbox.pack_start(gtk.Label(""))
-        else:
-            for widget in widgets:
-                if widget in COMMON_OPTIONS:
-                    data_widgets, lbl, x = getattr(self, "_create_widget_%s" % widget)(data_widgets, initial_data)
-                    a = gtk.Alignment(0, 0)
-                    a.add(lbl)
-                    vbox.pack_start(a, False, False)
-                    vbox.pack_start(x, False, False)
-                else:
-                    vbox.pack_start(widget, False, False)
-        vbox.show_all()
-        self.set_data("be_widgets", data_widgets)
-        self.xml.get_widget("btn_test_connection").set_sensitive(bool(be))
+        dlg = DatasourceEditDialog(self.app, self.dlg, datasource)
+        dlg.run()
+        dlg.destroy()
+
+    def on_delete_datasource(self, *args):
+        datasource = self.get_selected_datasource()
+        if datasource is None:
+            return
+        answer = dialogs.yesno(_(u'Delete Data Source?'), parent=self.dlg)
+        if answer == gtk.RESPONSE_YES:
+            self.app.datasources.delete(datasource)
+
+    # --------------
+    # Provider page
+    # --------------
+
+    def _provider_visible(self, model, iter):
+        """visible filter function for provider list"""
+        combo = self.builder.get_object('combo_provider_filter')
+        cmodel = combo.get_model()
+        citer = combo.get_active_iter()
+        selected = cmodel.get_value(citer, 0)
+        available = model.get_value(iter, 4)
+        if selected == 0 and not available:  # active
+            return False
+        elif selected == 1 and available:  # available
+            return False
+        return True
+
+    def on_provider_filter_changed(self, *args):
+        self.refresh_providers()
+
+    def on_refresh_provider(self, *args):
+        self.refresh_providers()
 
 
-class BackendInfoDialog(GladeWidget):
+    def init_providers(self):
+        # List
+        treeview = self.builder.get_object('treeview_provider')
+        model = gtk.ListStore(str,  # name (= key)
+                              str,  # stock icon
+                              str,  # label (markup)
+                              str,  # human readable name (for sorting)
+                              bool, # available
+                              )
+        model.set_sort_column_id(3, gtk.SORT_ASCENDING)
+        filtered_model = model.filter_new()
+        filtered_model.set_visible_func(self._provider_visible)
+        treeview.set_model(filtered_model)
+        col = gtk.TreeViewColumn()
+        renderer = gtk.CellRendererPixbuf()
+        col.pack_start(renderer, expand=False)
+        col.add_attribute(renderer, 'stock-id', 1)
+        renderer = gtk.CellRendererText()
+        col.pack_start(renderer, expand=True)
+        col.add_attribute(renderer, 'markup', 2)
+        treeview.append_column(col)
 
-    def __init__(self, instance):
-        GladeWidget.__init__(self, instance,
-                             "crunchyfrog", "backend_info_dialog")
-        self.populate()
-
-    def _setup_widget(self):
-        self.list = self.xml.get_widget("list_backends")
-        model = gtk.ListStore(str, str)
-        self.list.set_model(model)
-        col = gtk.TreeViewColumn("", gtk.CellRendererPixbuf(), stock_id=0)
-        self.list.append_column(col)
-        col = gtk.TreeViewColumn("", gtk.CellRendererText(), markup=1)
-        self.list.append_column(col)
-
-    def populate(self):
-        model = self.list.get_model()
-        from cf.plugins.core import PLUGIN_TYPE_BACKEND
-        for be in self.app.plugins.get_plugins(PLUGIN_TYPE_BACKEND):
-            iter = model.append(None)
-            if be.INIT_ERROR:
-                ico = "gtk-dialog-error"
-                lbl = be.name+"\n"+be.INIT_ERROR
-            elif  self.app.plugins.is_active(be):
-                ico = "gtk-apply"
-                lbl = be.name
+    def refresh_providers(self):
+        available = cf.db.availability()
+        model = self.builder.get_object('treeview_provider').get_model()
+        model = model.props.child_model
+        model.clear()
+        for name in cf.db.DIALECTS:
+            data = cf.db.DIALECTS[name]
+            label = ('<b>%s</b>\n<span size="small">%s</span>'
+                     % (gobject.markup_escape_text(data['name']),
+                        gobject.markup_escape_text(data['description'])))
+            if available[name][0] == True:
+                icon = 'gtk-apply'
             else:
-                ico = "gtk-dialog-warning"
-                lbl = be.name+"\n"+_(u"Plugin not active")
-            model.set(iter, 0, ico, 1, lbl)
+                icon = 'gtk-dialog-warning'
+                label += (' <span foreground="red" size="small">(%s)</span>'
+                          % gobject.markup_escape_text(available[name][1]))
+            model.append([name, icon, label, data['name'],
+                          available[name][0]])
+
+    def destroy(self):
+        self.dlg.destroy()
+
+    def run(self):
+        return self.dlg.run()
+
+
+class DatasourceEditDialog(object):
+
+    def __init__(self, app, parent=None, datasource=None):
+        self.app = app
+        self.builder = gtk.Builder()
+        self.builder.add_from_file(app.get_glade_file('datasourceedit.glade'))
+        self.builder.connect_signals(self)
+        self.dlg = self.builder.get_object('dialog_datasource_edit')
+        self.dlg.set_transient_for(parent)
+        self.datasource = None
+        self.widget_startup_commands = None
+        self.populate_dbtype()
+        self.setup_startup_commands()
+        if datasource:
+            self.set_datasource(datasource)
+
+    def run(self):
+        return self.dlg.run()
+
+    def destroy(self):
+        self.dlg.destroy()
+
+    def on_response(self, dlg, response_id):
+        if response_id == 1:  # test connection
+            dlg.stop_emission('response')
+            self.test_connection()
+            return True
+        elif response_id == 2:  # ok button
+            res = self.save_datasource()
+            if not res:
+                dlg.stop_emission('response')
+                return True
+
+    def populate_dbtype(self):
+        model = self.builder.get_object('model_dbtype')
+        model.clear()
+        model.set_sort_column_id(1, gtk.SORT_ASCENDING)
+        available = [key for key, value in cf.db.availability().iteritems()
+                     if value[0] == True]
+        for key in cf.db.DIALECTS:
+            if key not in available:
+                continue
+            model.append([key, cf.db.DIALECTS[key]['name']])
+
+    def setup_startup_commands(self):
+        sw = self.builder.get_object('sw_startup_commands')
+        editor = SQLView(self)
+        editor.set_show_line_numbers(False)
+        sw.add(editor)
+        editor.show()
+        self.widget_startup_commands = editor
+
+    def set_datasource(self, datasource):
+        combo = self.builder.get_object('combo_dbtype')
+        model = combo.get_model()
+        iter_ = model.get_iter_first()
+        while iter_:
+            if model.get_value(iter_, 0) == datasource.url.drivername:
+                combo.set_active_iter(iter_)
+                break
+            iter_ = model.iter_next(iter_)
+        self.builder.get_object('entry_name').set_text(datasource.name or '')
+        entry = self.builder.get_object('entry_description')
+        entry.set_text(datasource.description or '')
+        backend = self.get_selected_backend()
+        backend_options = {}
+        [backend_options.setdefault(option.key, option)
+         for option in backend.get_options()]
+        data = datasource.to_dict()
+        for child in self.builder.get_object('table_connection_settings'):
+            key = child.get_data('cf::key')
+            if key is None:
+                continue
+            if key in data and key in backend_options:
+                option = backend_options[key]
+                if option.widget == option.WIDGET_CHECKBOX:
+                    child.set_active(data[key])
+                elif option.widget == option.WIDGET_FILECHOOSER:
+                    child.set_filename(data[key])
+                elif option.widget == option.WIDGET_COMBO:
+                    model = child.get_model()
+                    iter_ = model.get_iter_first()
+                    while iter_:
+                        if model.get_value(iter_, 0) == data[key]:
+                            child.set_active_iter(iter_)
+                            break
+                        iter_ = model.iter_next(iter_)
+                else:
+                    child.set_text(data[key] or '')
+            elif key == 'ask_for_password':
+                child.set_active(data['ask_for_password'])
+        buffer_ = self.widget_startup_commands.get_buffer()
+        buffer_.set_text(datasource.startup_commands or '')
+        check = self.builder.get_object('check_color')
+        check.set_active(datasource.color is not None)
+        if datasource.color is not None:
+            btn = self.builder.get_object('colorbutton_datasource')
+            btn.set_color(gtk.gdk.color_parse(datasource.color))
+        self.datasource = datasource
+
+    def get_selected_backend(self):
+        """Returns the selected backend or ``None``."""
+        combo = self.builder.get_object('combo_dbtype')
+        model = combo.get_model()
+        iter_ = combo.get_active_iter()
+        if iter_ is None:
+            return None
+        return cf.db.get_dialect_backend(model.get_value(iter_, 0))
+
+    def on_check_color_toggled(self, check):
+        btn = self.builder.get_object('colorbutton_datasource')
+        btn.set_sensitive(check.get_active())
+
+    def on_dbtype_changed(self, combo):
+        backend = self.get_selected_backend()
+        for item in ['lbl_name', 'entry_name',
+                     'lbl_description', 'entry_description',
+                     'lbl_color', 'check_color',
+                     'frame_connection', 'btn_test_connection']:
+            self.builder.get_object(item).set_sensitive(backend is not None)
+        table = self.builder.get_object('table_connection_settings')
+        table.foreach(lambda child: table.remove(child))
+        if backend is None:
+            return
+        row = 0
+        for option in backend.get_options():
+            row += 1
+            second_widget = None
+            table.resize(row, 2)
+            lbl = gtk.Label('%s:' % option.label)
+            lbl.set_alignment(0, 0.5)
+            if option.widget == option.WIDGET_CHECKBOX:
+                entry = gtk.CheckButton()
+            elif option.widget == option.WIDGET_PASSWORD:
+                entry = gtk.Entry()
+                entry.set_visibility(False)
+                second_widget = gtk.CheckButton(_(u'Ask for password'))
+                cb = lambda chk, e: e.set_sensitive(not chk.get_active())
+                second_widget.connect('toggled', cb, entry)
+                second_widget.set_data('cf::key', 'ask_for_password')
+            elif option.widget == option.WIDGET_FILECHOOSER:
+                entry = gtk.FileChooserButton(_(u'Select file'))
+            elif option.widget == option.WIDGET_COMBO:
+                model = gtk.ListStore(gobject.TYPE_PYOBJECT, str)
+                entry = gtk.ComboBox(model)
+                cell = gtk.CellRendererText()
+                entry.pack_start(cell, True)
+                entry.add_attribute(cell, 'text', 1)
+                for choice in option.choices:
+                    model.append(choice)
+            # TODO: Port widget
+            else:
+                entry = gtk.Entry()
+            if option.tooltip is not None:
+                entry.set_tooltip_text(option.tooltip)
+            entry.set_data('cf::key', option.key)
+            if option.key == 'url':
+                entry.set_text('%s://' % backend.drivername)
+                entry.set_tooltip_text(_(u'An URL'))
+
+            table.attach(lbl, 0, 1, row-1, row,
+                         xoptions=gtk.FILL,
+                         yoptions=gtk.FILL)
+            table.attach(entry, 1, 2, row-1, row,
+                         yoptions=gtk.FILL)
+            if second_widget:
+                row += 1
+                table.attach(second_widget, 1, 2, row-1, row,
+                             yoptions=gtk.FILL)
+        table.show_all()
+
+    def _get_value_from_widget(self, option):
+        """Retrieves the value for an backend option from widget."""
+        table = self.builder.get_object('table_connection_settings')
+        for child in table.get_children():
+            key = child.get_data('cf::key')
+            if key != option.key:
+                continue
+            if option.widget == option.WIDGET_CHECKBOX:
+                return child.get_active()
+            elif option.widget == option.WIDGET_FILECHOOSER:
+                return child.get_filename()
+            elif option.widget == option.WIDGET_COMBO:
+                model = child.get_model()
+                iter_ = child.get_active_iter()
+                if iter_ is None:
+                    return None
+                return model.get_value(iter_, 0)
+            else:
+                return child.get_text() or None
+        return None
+
+    def _get_url_options(self):
+        """Collects URL related options."""
+        backend = self.get_selected_backend()
+        options = {}
+        for option in backend.get_options():
+            value = self._get_value_from_widget(option)
+            options[option.key] = value
+            if option.key == 'password':
+                opt = GUIOption('ask_for_password', '',
+                                widget=GUIOption.WIDGET_CHECKBOX)
+                opt.key = 'ask_for_password'
+                options['ask_for_password'] = self._get_value_from_widget(opt)
+        return options
+
+    def get_sa_url(self):
+        """Create and return SQLAlchemy URL from widgets."""
+        options = self._get_url_options()
+        backend = self.get_selected_backend()
+        return backend.create_url(options)
+
+    def make_datasource(self, create_new=False):
+        """Apply current settings to data source or create a new one."""
+        if self.datasource and not create_new:
+            ds = self.datasource
+        else:
+            ds = cf.db.Datasource()
+        ds.url = self.get_sa_url()
+        data = self._get_url_options()
+        if 'ask_for_password' in data:
+            ds.ask_for_password = data['ask_for_password']
+        ds.name = self.builder.get_object('entry_name').get_text() or None
+        widget = self.builder.get_object('entry_description')
+        ds.description = widget.get_text() or None
+        if self.builder.get_object('check_color').get_active():
+            btn = self.builder.get_object('colorbutton_datasource')
+            ds.color = btn.get_color().to_string()
+        else:
+            ds.color = None
+        buffer_ = self.widget_startup_commands.get_buffer()
+        ds.startup_commands = buffer_.get_text(*buffer_.get_bounds()) or None
+        return ds
+
+    def check_required(self):
+        """Returns a list of missing required options or None."""
+        data = self._get_url_options()
+        backend = self.get_selected_backend()
+        result = []
+        for option in backend.get_options():
+            if option.required and data.get(option.key, None) is None:
+                result.append(option)
+        if result:
+            return result
+        return None
+
+    def test_connection(self):
+        """Test the current settings."""
+        result = self.check_required()
+        if result is not None:
+            msg = _(u'Missing fields:\n%(fields)s')
+            msg = msg % {'fields': ', '.join([opt.label for opt in result])}
+            dialogs.error(_(u'Failed'), msg, parent=self.dlg)
+            return
+        ds = self.make_datasource(create_new=True)
+        try:
+            conn = ds._open_connection()
+            conn.close()
+            dialogs.info(_(u'Succeeded'), parent=self.dlg)
+        except:
+            import logging
+            logging.exception('xx')
+            dialogs.error(_(u'Failed'),
+                          gobject.markup_escape_text(str(sys.exc_info()[1])))
+
+    def save_datasource(self):
+        """Save current settings."""
+        # TODO: Refactor, we need a validate function
+        result = self.check_required()
+        if result is not None:
+            msg = _(u'Missing fields:\n%(fields)s')
+            msg = msg % {'fields': ', '.join([opt.label for opt in result])}
+            dialogs.error(_(u'Failed'), msg, parent=self.dlg)
+            return False
+        ds = self.make_datasource()
+        self.app.datasources.save(ds)
+        return True

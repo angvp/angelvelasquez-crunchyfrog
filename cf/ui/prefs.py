@@ -485,11 +485,20 @@ class PreferencesDialog(GladeWidget):
                     continue
                 citer = model.append(iter_)
                 accel_path = action.get_accel_path()
-                keyval, mods = gtk.accel_map_lookup_entry(accel_path)
+                if accel_path is None:
+                    keyval = mods = None
+                else:
+                    shortcut = gtk.accel_map_lookup_entry(accel_path)
+                    if shortcut is not None:
+                        keyval, mods = shortcut
+                    else:
+                        keyval = mods = None
                 model.set(citer,
                           0, action.props.label.replace('_', ''),
-                          1, keyval,
-                          2, mods,
                           3, True,
                           4, action.props.tooltip,
                           5, action)
+                if keyval is not None:
+                    model.set(citer, 1, keyval)
+                if mods is not None:
+                    model.set(citer, 2, mods)

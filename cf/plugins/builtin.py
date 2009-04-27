@@ -44,4 +44,5 @@ except ImportError, err:
 
 from cf.shell import CFShell
 from cf.library import SQLLibraryPlugin
+from cf.nativeshell import NativeShellPlugin
 
