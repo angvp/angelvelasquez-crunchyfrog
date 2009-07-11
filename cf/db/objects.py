@@ -510,7 +510,12 @@ class Column(DBObject):
         self.typestr = _(u"Column")
 
     def __cmp__(self, other):
-        return cmp(self.sortorder, other.sortorder)
+        if not isinstance(other, Column) and isinstance(other, DBObject):
+            return cmp(self.props.name, other.props.name)
+        elif isinstance(other, Column):
+            return cmp(self.props.sortorder, other.props.sortorder)
+        else:
+            return 1
 
 class Constraints(Collection):
 
