@@ -45,6 +45,7 @@ Misc.
 - Export filter should emit a progress signal (and of course the dialog
   should have a callback).
 - Distribute API docs (crunchyfrog-dev package, devhelp integration).
+- Get rid of user database?
 
 
 Windows

@@ -24,20 +24,18 @@ It is also used by CrunchyFrog itself i.e. to store connection data.
 :USER_DB: Path to sqlite3 file
 """
 
+import logging
+import os.path
+import sqlite3
+import sys
+
 import gobject
 
-import os.path
-try:
-    import sqlite3 as sqlite
-except ImportError:
-    from pysqlite2 import dbapi2 as sqlite
-
 from cf import USER_CONFIG_DIR
+from cf.ui import dialogs
 
 USER_DB = os.path.join(USER_CONFIG_DIR, "user.db")
 
-import logging
-log = logging.getLogger("USERDB")
 
 class UserDB(gobject.GObject):
     """User database class.
@@ -96,9 +94,15 @@ class UserDB(gobject.GObject):
 
         This method creates the database if necessary.
         """
-        log.debug("Initializing user database: %s", self._user_db)
+        logging.debug("Initializing user database: %s", self._user_db)
         create = not os.path.isfile(self._user_db)
-        self.conn = sqlite.connect(self._user_db)
+        try:
+            self.conn = sqlite3.connect(self._user_db)
+        except sqlite3.OperationalError, err:
+            logging.exception('Unable to open user database:')
+            dialogs.error(_(u'Unable to open user database'),
+                          '%s (%s)' % (str(err), self._user_db))
+            sys.exit(1)
         self.cursor = self.conn.cursor()
         if create:
             self.__create_userdb()
@@ -138,8 +142,8 @@ class UserDB(gobject.GObject):
         where tablename=?"
         try:
             self.cursor.execute(sql, (table_name,))
-        except sqlite.OperationalError, e:
-            log.warning("sy_table_version not found: %s" % str(e))
+        except sqlite3.OperationalError, e:
+            logging.warning("sy_table_version not found: %s" % str(e))
             return None
         result = self.cursor.fetchone()
         if result:
@@ -161,12 +165,12 @@ class UserDB(gobject.GObject):
         :Returns: ``True`` if the table was successfully created, otherwise ``False``
         """
         if self.get_table_version(name):
-            log.error("Table '%s' already exists.", name)
+            logging.error("Table '%s' already exists.", name)
             return False
         try:
             self.cursor.execute(statement)
-        except sqlite.OperationalError, e:
-            log.error("Failed to create table '%s': %s", name, str(e))
+        except sqlite3.OperationalError, e:
+            logging.error("Failed to create table '%s': %s", name, str(e))
             return False
         sql = ("insert into sy_table_version (tablename, version) "
                "values (?,?)")
@@ -189,7 +193,7 @@ class UserDB(gobject.GObject):
         sql = "drop table %s" % name
         try:
             self.cursor.execute(sql)
-        except sqlite.OperationalError, e:
-            log.error("Failed to delete table: %s", str(e))
+        except sqlite3.OperationalError, e:
+            logging.error("Failed to delete table: %s", str(e))
             return False
         return True
