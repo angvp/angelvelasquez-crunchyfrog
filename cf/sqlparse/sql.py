@@ -3,7 +3,6 @@
 """This module contains classes representing syntactical elements of SQL."""
 
 import re
-import types
 
 from sqlparse import tokens as T
 
@@ -16,14 +15,15 @@ class Token(object):
     the type of the token.
     """
 
-    __slots__ = ('value', 'ttype',)
+    __slots__ = ('value', 'ttype', 'parent')
 
     def __init__(self, ttype, value):
         self.value = value
         self.ttype = ttype
+        self.parent = None
 
     def __str__(self):
-        return unicode(self).encode('latin-1')
+        return unicode(self).encode('utf-8')
 
     def __repr__(self):
         short = self._get_repr_value()
@@ -64,7 +64,7 @@ class Token(object):
         If *regex* is ``True`` (default is ``False``) the given values are
         treated as regular expressions.
         """
-        type_matched = self.ttype in ttype
+        type_matched = self.ttype is ttype
         if not type_matched or values is None:
             return type_matched
         if isinstance(values, basestring):
@@ -93,6 +93,32 @@ class Token(object):
         """Return ``True`` if this token is a whitespace token."""
         return self.ttype and self.ttype in T.Whitespace
 
+    def within(self, group_cls):
+        """Returns ``True`` if this token is within *group_cls*.
+
+        Use this method for example to check if an identifier is within
+        a function: ``t.within(sql.Function)``.
+        """
+        parent = self.parent
+        while parent:
+            if isinstance(parent, group_cls):
+                return True
+            parent = parent.parent
+        return False
+
+    def is_child_of(self, other):
+        """Returns ``True`` if this token is a direct child of *other*."""
+        return self.parent == other
+
+    def has_ancestor(self, other):
+        """Returns ``True`` if *other* is in this tokens ancestry."""
+        parent = self.parent
+        while parent:
+            if parent == other:
+                return True
+            parent = parent.parent
+        return False
+
 
 class TokenList(Token):
     """A group of tokens.
@@ -113,7 +139,7 @@ class TokenList(Token):
         return ''.join(unicode(x) for x in self.flatten())
 
     def __str__(self):
-        return unicode(self).encode('latin-1')
+        return unicode(self).encode('utf-8')
 
     def _get_repr_name(self):
         return self.__class__.__name__
@@ -149,6 +175,10 @@ class TokenList(Token):
 
     def get_sublists(self):
         return [x for x in self.tokens if isinstance(x, TokenList)]
+
+    @property
+    def _groupable_tokens(self):
+        return self.tokens
 
     def token_first(self, ignore_whitespace=True):
         """Returns the first child token.
@@ -190,7 +220,7 @@ class TokenList(Token):
 
     def token_next_match(self, idx, ttype, value, regex=False):
         """Returns next token where it's ``match`` method returns ``True``."""
-        if type(idx) != types.IntType:
+        if not isinstance(idx, int):
             idx = self.token_index(idx)
         for token in self.tokens[idx:]:
             if token.match(ttype, value, regex):
@@ -202,8 +232,8 @@ class TokenList(Token):
             passed = False
             for func in funcs:
                 if func(token):
-                   passed = True
-                   break
+                    passed = True
+                    break
             if not passed:
                 return token
         return None
@@ -269,6 +299,9 @@ class TokenList(Token):
         for t in tokens:
             self.tokens.remove(t)
         grp = grp_cls(tokens)
+        for token in tokens:
+            token.parent = grp
+        grp.parent = self
         self.tokens.insert(idx, grp)
         return grp
 
@@ -397,6 +430,10 @@ class Parenthesis(TokenList):
     """Tokens between parenthesis."""
     __slots__ = ('value', 'ttype', 'tokens')
 
+    @property
+    def _groupable_tokens(self):
+        return self.tokens[1:-1]
+
 
 class Assignment(TokenList):
     """An assignment like 'var := val;'"""
@@ -455,3 +492,17 @@ class Case(TokenList):
             elif in_value:
                 ret[-1][1].append(token)
         return ret
+
+
+class Function(TokenList):
+    """A function or procedure call."""
+
+    __slots__ = ('value', 'ttype', 'tokens')
+
+    def get_parameters(self):
+        """Return a list of parameters."""
+        parenthesis = self.tokens[-1]
+        for t in parenthesis.tokens:
+            if isinstance(t, IdentifierList):
+                return t.get_identifiers()
+        return []

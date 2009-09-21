@@ -1,12 +1,21 @@
 In Development
 --------------
 
+New Features
+ * Hide results pane either by keyboard shortcut (Shift+F9) or by default
+   for new editors.
+
 Bug Fixes
  * Updated GTK requirement in Glade files to GTK 2.12.
  * Improved GNOME keyring detection (issue68, reported by Igor Stirbu).
  * Fixed a bug with data sources defined with port (issue79, reported
    by Igor Stirbu).
  * Improved packaging (thanks to Kartik Mistry).
+ * Close broken connections.
+
+Other
+ * Improved painting of SQL markers.
+ * Preserve cursor position when formatting SQL statements.
 
 
 Release 0.4.0 (Jul 11, 2009)

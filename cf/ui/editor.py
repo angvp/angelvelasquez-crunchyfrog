@@ -112,6 +112,8 @@ class Editor(gobject.GObject, PaneItem):
         self.set_data("win", None)
         self.win.emit('editor-created', self)
         self.show_all()
+        if self.app.config.get('editor.hide_results_pane'):
+            gobject.idle_add(self.toggle_results_pane)
 
     def show_all(self):
         self.widget.show_all()
@@ -281,6 +283,7 @@ class Editor(gobject.GObject, PaneItem):
         self.results.add_message('BEGIN TRANSACTION', 'info')
 
     def execute_query(self, statement_at_cursor=False):
+        self.results.assure_visible()
         def exec_threaded(statement):
             if self.app.config.get("sqlparse.enabled", True):
                 stmts = sqlparse.split(statement)
@@ -359,6 +362,7 @@ class Editor(gobject.GObject, PaneItem):
                 query.execute()
 
     def explain(self):
+        self.results.assure_visible()
         buf = self.textview.get_buffer()
         bounds = buf.get_selection_bounds()
         if not bounds:
@@ -387,7 +391,8 @@ class Editor(gobject.GObject, PaneItem):
 
     def set_connection(self, conn):
         if self.connection and self.__conn_close_tag:
-            self.connection.disconnect(self.__conn_close_tag)
+            if self.connection.handler_is_connected(self.__conn_close_tag):
+                self.connection.disconnect(self.__conn_close_tag)
             self.__conn_close_tag = None
         self.connection = conn
         if conn:
@@ -662,6 +667,15 @@ class Editor(gobject.GObject, PaneItem):
         else:
             start, end = res
             select_range = True
+        # Count chars excluding whitespaces
+        insert_mark = buffer_.get_insert()
+        insert_iter = buffer_.get_iter_at_mark(insert_mark)
+        if insert_iter.in_range(start, end):
+            char_offset = len(re.sub(r'\s', '',
+                                     buffer_.get_text(start, insert_iter)))
+            start_offset = start.get_offset()
+        else:
+            char_offset = start_offset = None
         orig = buffer_.get_text(start, end)
         formatted = sqlparse.format(orig, **options)
         # Modify buffer
@@ -674,6 +688,27 @@ class Editor(gobject.GObject, PaneItem):
             end.backward_chars(len(formatted))
             buffer_.select_range(end, start)
         buffer_.end_user_action()
+        # TODO: place cursor - but how to do this... :)
+        if char_offset is not None:
+            num = 0
+            idx = 0
+            iter_ = buffer_.get_iter_at_offset(start_offset)
+            for i in range(len(formatted)):
+                if formatted[i] not in '\r\n\t ':
+                    num += 1
+                if num == char_offset:
+                    iter_.forward_chars(i+1)
+                    buffer_.place_cursor(iter_)
+                    self.textview.scroll_to_mark(buffer_.get_insert(), 0.25)
+                    break
+
+    def toggle_results_pane(self):
+        """Show or hide the result pane."""
+        pane = self.widget.get_child2()
+        if pane.get_property('visible'):
+            pane.hide()
+        else:
+            pane.show()
 
 
 class ResultsView(object):
@@ -779,6 +814,12 @@ class ResultsView(object):
     def on_grid_selection_changed(self, grid, selected_cells):
         self.builder.get_object("editor_copy_data").set_sensitive(bool(selected_cells))
 
+    def assure_visible(self):
+        """Make sure that the result pane is visible."""
+        pane = self.widget.get_parent()
+        if not pane.get_property('visible'):
+            pane.show()
+
     def copy_data(self, clipboard=None):
         """Copy selected values to clipboard.
 
@@ -841,6 +882,7 @@ class ResultsView(object):
             self.explain_results.set_result(query.rows, query.description)
 
     def set_query(self, query):
+        self.assure_visible()
         self.grid.set_query(query)
         model = self.messages.get_model()
         for err in query.errors:
@@ -864,6 +906,7 @@ class ResultsView(object):
           type_: Message type ('info', 'output',
                  'error', 'warning', 'query', None).
         """
+        self.assure_visible()
         assert type_ in (None, 'info', 'output', 'error', 'warning', 'query')
         stock_id = None
         foreground = None
